@@ -1,8 +1,29 @@
 #include <stddef.h>	/* size_t */
-#ifdef __SSSE3__
+#if __x86_64__ || __i386__
+#ifdef __SSSE3__ /* x86_64 arch build only */
 #include <tmmintrin.h>
+#endif /*__SSSE3__*/
+#include <cpuid.h>
 #endif
 #include "base64.h"
+
+
+#if __x86_64__ || __i386__
+static unsigned int have_features = 0;
+static unsigned int have_ssse3 = 0;
+static unsigned int _cpuid_eax = 0;
+static unsigned int _cpuid_ebx = 0;
+static unsigned int _cpuid_ecx = 0;
+static unsigned int _cpuid_edx = 0;
+static void inline _get_x86_features()
+{
+    if (!have_features) {
+        __get_cpuid(/*level:*/ 1, &_cpuid_eax, &_cpuid_ebx, &_cpuid_ecx, &_cpuid_edx);
+        have_features = 1;
+        have_ssse3 = _cpuid_ecx & bit_SSE3;
+    }
+}
+#endif
 
 static const char
 base64_table_enc[] =
@@ -15,16 +36,23 @@ base64_table_enc[] =
  * the datastream, and we will use that later. The characters A-Z, a-z, 0-9
  * and + / are mapped to their "decoded" values. The other bytes all map to
  * the value 255, which flags them as "invalid input". */
-
 static const unsigned char
 base64_table_dec[] =
 {
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,		/*   0..15 */
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,		/*  16..31 */
+#ifdef WITH_URLSAFE
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,  62, 255,  62, 255,  63,		/*  32..47 */
+#else
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,  62, 255, 255, 255,  63,		/*  32..47 */
+#endif
 	 52,  53,  54,  55,  56,  57,  58,  59,  60,  61, 255, 255, 255, 254, 255, 255,		/*  48..63 */
 	255,   0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,		/*  64..79 */
+#ifdef WITH_URLSAFE
+	 15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25, 255, 255, 255, 255,  63,		/*  80..95 */
+#else
 	 15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25, 255, 255, 255, 255, 255,		/*  80..95 */
+#endif
 	255,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,		/*  96..111 */
 	 41,  42,  43,  44,  45,  46,  47,  48,  49,  50,  51, 255, 255, 255, 255, 255,		/* 112..127 */
 	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,		/* 128..143 */
@@ -56,6 +84,11 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 	/* Use local temporaries to avoid cache thrashing: */
 	size_t outl = 0;
 	struct base64_state st;
+
+#if __x86_64__ || __i386__
+        _get_x86_features();
+#endif
+
 	st.bytes = state->bytes;
 	st.carry = state->carry;
 
@@ -71,7 +104,9 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 		for (;;)
 		{
 		case 0:
-#ifdef __SSSE3__
+#ifdef __SSSE3__ /* x86_64 arch build only */
+                if (have_ssse3) {
+
 			/* If we have SSSE3 support, pick off 12 bytes at a
 			 * time for as long as we can: */
 			while (srclen >= 12)
@@ -151,6 +186,7 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 				outl += 16;
 				srclen -= 12;
 			}
+                }
 #endif
 			if (srclen-- == 0) {
 				break;
@@ -222,6 +258,11 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 	/* Use local temporaries to avoid cache thrashing: */
 	size_t outl = 0;
 	struct base64_state st;
+
+#if __x86_64__ || __i386__
+        _get_x86_features();
+#endif
+
 	st.eof = state->eof;
 	st.bytes = state->bytes;
 	st.carry = state->carry;
@@ -242,7 +283,12 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 		for (;;)
 		{
 		case 0:
-#ifdef __SSSE3__
+#ifdef SKIP_INVALID
+                label0:;
+#endif
+
+#ifdef __SSSE3__ /* x86_64 arch build only */
+                if (have_ssse3) {
 			/* If we have SSSE3 support, pick off 16 bytes at a time for as long
 			 * as we can, but make sure that we quit before seeing any == markers
 			 * at the end of the string. Also, because we write four zeroes at
@@ -252,6 +298,9 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 			{
 				__m128i str, mask, res;
 				__m128i s1mask, s2mask, s3mask, s4mask, s5mask;
+#ifdef WITH_URLSAFE
+				__m128i s4amask, s5amask;
+#endif
 
 				/* Load string: */
 				str = _mm_loadu_si128((__m128i *)c);
@@ -274,13 +323,21 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 
 				/* Set 4: "+" */
 				s4mask = _mm_cmpeq_epi8(str, _mm_set1_epi8('+'));
-
+#ifdef WITH_URLSAFE
+				s4amask = _mm_cmpeq_epi8(str, _mm_set1_epi8('-'));
+#endif
 				/* Set 5: "/" */
 				s5mask = _mm_cmpeq_epi8(str, _mm_set1_epi8('/'));
-
+#ifdef WITH_URLSAFE
+				s5amask = _mm_cmpeq_epi8(str, _mm_set1_epi8('_'));
+#endif
 				/* Check if all bytes have been classified; else fall back on bytewise code
 				 * to do error checking and reporting: */
-				if (_mm_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask) != 0xFFFF) {
+				if (_mm_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask
+#ifdef WITH_URLSAFE
+                                | s4amask | s5amask
+#endif
+                                ) != 0xFFFF) {
 					break;
 				}
 				/* Subtract sets from byte values: */
@@ -289,7 +346,10 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 				res |= s3mask & _mm_sub_epi8(str, _mm_set1_epi8('0' - 52));
 				res |= s4mask & _mm_set1_epi8(62);
 				res |= s5mask & _mm_set1_epi8(63);
-
+#ifdef WITH_URLSAFE
+				res |= s4amask & _mm_set1_epi8(62);
+				res |= s5amask & _mm_set1_epi8(63);
+#endif
 				/* Shuffle bytes to 32-bit bigendian: */
 				res = _mm_shuffle_epi8(res,
 				      _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12));
@@ -321,24 +381,34 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 				outl += 12;
 				srclen -= 16;
 			}
-#endif
+                }
+#endif /* __SSSE3__ */
 			if (srclen-- == 0) {
 				ret = 1;
 				break;
 			}
 			if ((q = base64_table_dec[(unsigned char)*c++]) >= 254) {
+#ifdef SKIP_INVALID
+                                goto label0;
+#endif
 				st.eof = 1;
 				/* Treat character '=' as invalid for byte 0: */
 				break;
 			}
 			st.carry = q << 2;
 			st.bytes++;
-
-		case 1:	if (srclen-- == 0) {
+		case 1:
+#ifdef SKIP_INVALID
+                label1:;
+#endif
+                        if (srclen-- == 0) {
 				ret = 1;
 				break;
 			}
 			if ((q = base64_table_dec[(unsigned char)*c++]) >= 254) {
+#ifdef SKIP_INVALID
+                                goto label1;
+#endif
 				st.eof = 1;
 				/* Treat character '=' as invalid for byte 1: */
 				break;
@@ -348,11 +418,18 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 			st.bytes++;
 			outl++;
 
-		case 2:	if (srclen-- == 0) {
+		case 2:
+#ifdef SKIP_INVALID
+                label2:;
+#endif
+                        if (srclen-- == 0) {
 				ret = 1;
 				break;
 			}
 			if ((q = base64_table_dec[(unsigned char)*c++]) >= 254) {
+#ifdef SKIP_INVALID
+                                goto label2;
+#endif
 				st.eof = 1;
 				/* When q == 254, the input char is '='. Return 1 and EOF.
 				 * Technically, should check if next byte is also '=', but never mind.
@@ -365,11 +442,18 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 			st.bytes++;
 			outl++;
 
-		case 3:	if (srclen-- == 0) {
+		case 3:
+#ifdef SKIP_INVALID
+                label3:;
+#endif
+                        if (srclen-- == 0) {
 				ret = 1;
 				break;
 			}
 			if ((q = base64_table_dec[(unsigned char)*c++]) >= 254) {
+#ifdef SKIP_INVALID
+                                goto label3;
+#endif
 				st.eof = 1;
 				/* When q == 254, the input char is '='. Return 1 and EOF.
 				 * When q == 255, the input char is invalid. Return 0 and EOF. */
