@@ -59,7 +59,10 @@ static unsigned int _cpuid_eax_7 = 0;
 static unsigned int _cpuid_ebx_7 = 0;
 static unsigned int _cpuid_ecx_7 = 0;
 static unsigned int _cpuid_edx_7 = 0;
-static void inline _get_x86_features()
+
+/* use CPUID to get x86 processor features */
+static void inline
+_get_x86_features()
 {
     if (!have_features) {
         __get_cpuid(/*level:*/ 1, &_cpuid_eax_1, &_cpuid_ebx_1, &_cpuid_ecx_1, &_cpuid_edx_1);
@@ -80,6 +83,12 @@ base64_table_enc[] =
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	"abcdefghijklmnopqrstuvwxyz"
 	"0123456789+/";
+
+static const char
+base64_table_enc_urlsafe[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	"abcdefghijklmnopqrstuvwxyz"
+	"0123456789-_";
 
 /* In the lookup table below, note that the value for '=' (character 61) is
  * 254, not 255. This character is used for in-band signaling of the end of
@@ -116,11 +125,21 @@ base64_table_dec[] =
 };
 
 void
-base64_stream_encode_init (struct base64_state *state)
+base64_stream_encode_init (struct base64_state *state
+#ifdef WITH_URLSAFE
+                           , int urlsafe
+#endif
+                           )
 {
 	state->eof = 0;
 	state->bytes = 0;
 	state->carry = 0;
+#ifdef WITH_URLSAFE
+        state->urlsafe = urlsafe ? 1 : 0;
+        state->base64_table_enc = urlsafe ? base64_table_enc_urlsafe : base64_table_enc;
+#else
+        state->base64_table_enc = base64_table_enc;
+#endif
 }
 
 void
@@ -228,7 +247,7 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 				blockmask |= s3mask;
 
 				/* set 4: 62, "+" */
-				s4mask = _mm256_andnot_si256(blockmask, _mm256_cmplt_epi8(res, _mm256_set1_epi8(63)));
+                                s4mask = _mm256_andnot_si256(blockmask, _mm256_cmplt_epi8(res, _mm256_set1_epi8(63)));
 				blockmask |= s4mask;
 
 				/* set 5: 63, "/"
@@ -238,8 +257,16 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 				s1 = s1mask & _mm256_add_epi8(res, _mm256_set1_epi8('A'));
 				s2 = s2mask & _mm256_add_epi8(res, _mm256_set1_epi8('a' - 26));
 				s3 = s3mask & _mm256_add_epi8(res, _mm256_set1_epi8('0' - 52));
+#ifdef WITH_URLSAFE
+				s4 = s4mask & _mm256_set1_epi8(state->urlsafe ? '-' : '+');
+#else
 				s4 = s4mask & _mm256_set1_epi8('+');
+#endif
+#ifdef WITH_URLSAFE
+				s5 = _mm256_andnot_si256(blockmask, _mm256_set1_epi8(state->urlsafe ? '_' :'/'));
+#else
 				s5 = _mm256_andnot_si256(blockmask, _mm256_set1_epi8('/'));
+#endif
 
 				/* Blend all the sets together and store: */
 				_mm256_storeu_si256(__m256i *)o, s1 | s2 | s3 | s4 | s5);
@@ -322,8 +349,16 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 				s1 = s1mask & _mm_add_epi8(res, _mm_set1_epi8('A'));
 				s2 = s2mask & _mm_add_epi8(res, _mm_set1_epi8('a' - 26));
 				s3 = s3mask & _mm_add_epi8(res, _mm_set1_epi8('0' - 52));
+#ifdef WITH_URLSAFE
+				s4 = s4mask & _mm_set1_epi8(state->urlsafe ? '-' : '+');
+#else
 				s4 = s4mask & _mm_set1_epi8('+');
+#endif
+#ifdef WITH_URLSAFE
+				s5 = _mm_andnot_si128(blockmask, _mm_set1_epi8(state->urlsafe ? '_' : '/'));
+#else
 				s5 = _mm_andnot_si128(blockmask, _mm_set1_epi8('/'));
+#endif
 
 				/* Blend all the sets together and store: */
 				_mm_storeu_si128((__m128i *)o, s1 | s2 | s3 | s4 | s5);
@@ -338,7 +373,7 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 			if (srclen-- == 0) {
 				break;
 			}
-			*o++ = base64_table_enc[*c >> 2];
+			*o++ = state->base64_table_enc[*c >> 2];
 			st.carry = (*c++ << 4) & 0x30;
 			st.bytes++;
 			outl += 1;
@@ -346,7 +381,7 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 		case 1:	if (srclen-- == 0) {
 				break;
 			}
-			*o++ = base64_table_enc[st.carry | (*c >> 4)];
+			*o++ = state->base64_table_enc[st.carry | (*c >> 4)];
 			st.carry = (*c++ << 2) & 0x3C;
 			st.bytes++;
 			outl += 1;
@@ -354,8 +389,8 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 		case 2:	if (srclen-- == 0) {
 				break;
 			}
-			*o++ = base64_table_enc[st.carry | (*c >> 6)];
-			*o++ = base64_table_enc[*c++ & 0x3F];
+			*o++ = state->base64_table_enc[st.carry | (*c >> 6)];
+			*o++ = state->base64_table_enc[*c++ & 0x3F];
 			st.bytes = 0;
 			outl += 2;
 		}
@@ -371,14 +406,14 @@ base64_stream_encode_final (struct base64_state *state, char *const out, size_t 
 	char *o = out;
 
 	if (state->bytes == 1) {
-		*o++ = base64_table_enc[state->carry];
+		*o++ = state->base64_table_enc[state->carry];
 		*o++ = '=';
 		*o++ = '=';
 		*outlen = 3;
 		return;
 	}
 	if (state->bytes == 2) {
-		*o++ = base64_table_enc[state->carry];
+		*o++ = state->base64_table_enc[state->carry];
 		*o++ = '=';
 		*outlen = 2;
 		return;
@@ -735,14 +770,22 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 }
 
 void
-base64_encode (const char *const src, size_t srclen, char *const out, size_t *const outlen)
+base64_encode (const char *const src, size_t srclen, char *const out, size_t *const outlen
+#ifdef WITH_URLSAFE
+               , int urlsafe
+#endif
+               )
 {
 	size_t s;
 	size_t t;
 	struct base64_state state;
 
 	/* Init the stream reader: */
+#ifdef WITH_URLSAFE
+	base64_stream_encode_init(&state, urlsafe);
+#else
 	base64_stream_encode_init(&state);
+#endif
 
 	/* Feed the whole string to the stream reader: */
 	base64_stream_encode(&state, src, srclen, out, &s);

@@ -5,16 +5,28 @@ struct base64_state {
 	int eof;
 	int bytes;
 	unsigned char carry;
+#ifdef WITH_URLSAFE
+        int urlsafe;
+#endif
+        const char *base64_table_enc;
 };
 
 /* Wrapper function to encode a plain string of given length. Output is written
  * to *out without trailing zero. Output length in bytes is written to *outlen.
  * The buffer in `out` has been allocated by the caller and is at least 4/3 the
  * size of the input: */
-void base64_encode (const char *const src, size_t srclen, char *const out, size_t *const outlen);
+void base64_encode (const char *const src, size_t srclen, char *const out, size_t *const outlen
+#ifdef WITH_URLSAFE
+                    ,int urlsafe
+#endif
+                    );
 
 /* Call this before calling base64_stream_encode() to init the state: */
-void base64_stream_encode_init (struct base64_state *);
+void base64_stream_encode_init (struct base64_state *
+#ifdef WITH_URLSAFE
+                                , int urlsafe
+#endif
+                                );
 
 /* Encodes the block of data of given length at `src`, into the buffer at
  * `out`. Caller is responsible for allocating a large enough out-buffer; it
