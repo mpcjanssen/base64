@@ -1,26 +1,76 @@
 #include <stddef.h>	/* size_t */
 #if __x86_64__ || __i386__
-#ifdef __SSSE3__ /* x86_64 arch build only */
-#include <tmmintrin.h>
-#endif /*__SSSE3__*/
+#if defined(__SSSE3__) || defined(__AVX2__)
+#include <immintrin.h>
+#endif
 #include <cpuid.h>
 #endif
 #include "base64.h"
 
 
 #if __x86_64__ || __i386__
+/*
+ * Intel instrinsic functions we use.
+ * See: https://software.intel.com/sites/landingpage/IntrinsicsGuide for details.
+ *
+ * [SSE]
+ *   Intrinsic             CPUID    Operation
+ *   _mm_add_epi8          SSE2     Add packed 8-bit integers in a and b, and store the results in dst.
+ *   _mm_andnot_si128      SSE2     dst[127:0] := ((NOT a[127:0]) AND b[127:0])
+ *   _mm_cmpeq_epi8        SSE2     Compare packed 8-bit integers in a and b for equality, and store the results in dst.
+ *   _mm_cmplt_epi8        SSE2     Compare packed 8-bit integers in a and b for less-than, and store the results in dst.
+ *   _mm_loadu_si128       SSE2     Load 128-bits of integer data from memory into dst
+ *   _mm_movemask_epi8     SSE2     Create mask from the most significant bit of each 8-bit element in a, and store the result in dst.
+ *   _mm_set1_epi32        SSE2     Broadcast 32-bit integer a to all elements of dst.
+ *   _mm_set1_epi8         SSE2     Broadcast 8-bit integer a to all elements of dst. This intrinsic may generate vpbroadcastb.
+ *   _mm_setr_epi8         SSE2     Set packed 8-bit integers in dst with the supplied values in reverse order.
+ *   _mm_shuffle_epi8      SSE3     Shuffle packed 8-bit integers in a according to shuffle control mask in the corresponding 8-bit element of b, and store the results in dst.
+ *   _mm_li_epi32          SSE2     Shift packed 32-bit integers in a left by imm while shifting in zeros, and store the results in dst.
+ *   _mm_srli_epi32        SSE2     Shift packed 32-bit integers in a right by imm while shifting in zeros, and store the results in dst.
+ *   _mm_storeu_si128      SSE2     Store 128-bits of integer data from a into memory. mem_addr does not need to be aligned on any particular boundary.
+ *   _mm_sub_epi8          SSE2     Subtract packed 8-bit integers in b from packed 8-bit integers in a, and store the results in dst.
+ *
+ * [AVX]
+ *  _mm256_loadu_si256     AVX      Load 256-bits of integer data from memory into dst. mem_addr does not need to be aligned on any particular boundary.
+ *  _mm256_set1_epi32      AVX      Broadcast 32-bit integer a to all elements of dst.
+ *  _mm256_set1_epi8       AVX      Broadcast 8-bit integer a to all elements of dst.
+ *  _mm256_setr_epi8       AVX      Set packed 8-bit integers in dst with the supplied values in reverse order.
+ *  _mm256_storeu_si256    AVX      Store 256-bits of integer data from a into memory. mem_addr does not need to be aligned on any particular boundary.
+ *
+ * [AVX2]
+ *
+ *  _mm256_add_epi8        AVX2     Add packed 8-bit integers in a and b, and store the results in dst.
+ *  _mm256_andnot_si256    AVX2     dst[255:0] := ((NOT a[255:0]) AND b[255:0])
+ *  _mm256_cmpeq_epi8      AVX2     Compare packed 8-bit integers in a and b for equality, and store the results in dst.
+ *  _mm256_cmplt_epi8      AVX2     Compare packed 8-bit integers in a and b for less-than, and store the results in dst.
+ *  _mm256_movemask_epi256 AVX2     Create mask from the most significant bit of each 8-bit element in a, and store the result in dst.
+ *  _mm256_slli_epi32      AVX2     Shift packed 32-bit integers in a left by imm while shifting in zeros, and store the results in dst.
+ *  _mm256_srli_epi32      AVX2     Shift packed 32-bit integers in a right by imm while shifting in zeros, and store the results in dst.
+ *  _mm256_sub_epi8        AVX2     Subtract packed 8-bit integers in b from packed 8-bit integers in a, and store the results in dst.
+ */
 static unsigned int have_features = 0;
 static unsigned int have_ssse3 = 0;
-static unsigned int _cpuid_eax = 0;
-static unsigned int _cpuid_ebx = 0;
-static unsigned int _cpuid_ecx = 0;
-static unsigned int _cpuid_edx = 0;
+static unsigned int have_avx2 = 0;
+static unsigned int _cpuid_eax_1 = 0;
+static unsigned int _cpuid_ebx_1 = 0;
+static unsigned int _cpuid_ecx_1 = 0;
+static unsigned int _cpuid_edx_1 = 0;
+static unsigned int _cpuid_eax_7 = 0;
+static unsigned int _cpuid_ebx_7 = 0;
+static unsigned int _cpuid_ecx_7 = 0;
+static unsigned int _cpuid_edx_7 = 0;
 static void inline _get_x86_features()
 {
     if (!have_features) {
-        __get_cpuid(/*level:*/ 1, &_cpuid_eax, &_cpuid_ebx, &_cpuid_ecx, &_cpuid_edx);
+        __get_cpuid(/*level:*/ 1, &_cpuid_eax_1, &_cpuid_ebx_1, &_cpuid_ecx_1, &_cpuid_edx_1);
         have_features = 1;
-        have_ssse3 = _cpuid_ecx & bit_SSE3;
+        have_ssse3 = _cpuid_ecx_1 & bit_SSE3;
+
+        __get_cpuid(/*level:*/ 7, &_cpuid_eax_7, &_cpuid_ebx_7, &_cpuid_ecx_7, &_cpuid_edx_7);
+        have_avx2 = _cpuid_ebx_7 & (1 << 5);
+
+        printf("have_sss3 = %d\n", have_ssse3);
+        printf("have_avx2 = %d\n", have_avx2);
     }
 }
 #endif
@@ -104,9 +154,106 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 		for (;;)
 		{
 		case 0:
+#ifdef __AVX2__ /* x86_64 arch build only */
+                if (have_avx2) {
+			/* If we have AVX2 support, pick off 24 bytes at a
+			 * time for as long as we can: */
+			while (srclen >= 24)
+			{
+				__m256i str, mask, res, blockmask;
+				__m256i s1, s2, s3, s4, s5;
+				__m256i s1mask, s2mask, s3mask, s4mask;
+
+				/* Load string: */
+				str = _mm256_loadu_si256(__m256i *)c);
+
+				/* Reorder to 32-bit big-endian, duplicating the third byte in every block of four.
+				 * This copies the third byte to its final destination, so we can include it later
+				 * by just masking instead of shifting and masking.
+				 * The workset must be in big-endian, otherwise the shifted bits do not carry over
+				 * properly among adjacent bytes: */
+				str = _mm256_shuffle_epi8(str,
+                                                          _mm256_setr_epi8(2, 2, 1, 0,
+                                                                           5, 5, 4, 3,
+                                                                           8, 8, 7, 6,
+                                                                           11, 11, 10, 9,
+                                                                           14, 14, 13, 12,
+                                                                           17, 17, 16, 15,
+                                                                           20, 20, 19, 18,
+                                                                           23, 23, 22, 21));
+
+				/* Mask to pass through only the lower 6 bits of one byte: */
+				mask = _mm256_set1_epi32(0x3F000000);
+
+				/* Shift bits by 2, mask in only the first byte: */
+				res = _mm256_srli_epi32(str, 2) & mask;
+				mask = _mm256_srli_epi32(mask, 8);
+
+				/* Shift bits by 4, mask in only the second byte: */
+				res |= _mm256_srli_epi32(str, 4) & mask;
+				mask = _mm256_srli_epi32(mask, 8);
+
+				/* Shift bits by 6, mask in only the third byte: */
+				res |= _mm256_srli_epi32(str, 6) & mask;
+				mask = _mm256_srli_epi32(mask, 8);
+
+				/* No shift necessary for the fourth byte because we duplicated
+				 * the third byte to this position; just mask: */
+				res |= str & mask;
+
+				/* Reorder to 32-bit little-endian: */
+				res = _mm256_shuffle_epi8(res,
+				      _mm256_setr_epi8(3, 2, 1, 0,
+                                                       7, 6, 5, 4,
+                                                       11, 10, 9, 8,
+                                                       15, 14, 13, 12,
+                                                       19, 18, 17, 16,
+                                                       23, 22, 21, 20,
+                                                       27, 26, 25, 24,
+                                                       31, 30, 29, 28));
+
+				/* The bits have now been shifted to the right locations;
+				 * translate their values 0..63 to the Base64 alphabet: */
+
+				/* set 1: 0..25, "ABCDEFGHIJKLMNOPQRSTUVWXYZ" */
+				s1mask = _mm256_cmplt_epi8(res, _mm256_set1_epi8(26));
+				blockmask = s1mask;
+
+				/* set 2: 26..51, "abcdefghijklmnopqrstuvwxyz" */
+				s2mask = _mm256_andnot_si256(blockmask, _mm256_cmplt_epi8(res, _mm256_set1_epi8(52)));
+				blockmask |= s2mask;
+
+				/* set 3: 52..61, "0123456789" */
+				s3mask = _mm256_andnot_si256(blockmask, _mm256_cmplt_epi8(res, _mm256_set1_epi8(62)));
+				blockmask |= s3mask;
+
+				/* set 4: 62, "+" */
+				s4mask = _mm256_andnot_si256(blockmask, _mm256_cmplt_epi8(res, _mm256_set1_epi8(63)));
+				blockmask |= s4mask;
+
+				/* set 5: 63, "/"
+				 * Everything that is not blockmasked */
+
+				/* Create the masked character sets: */
+				s1 = s1mask & _mm256_add_epi8(res, _mm256_set1_epi8('A'));
+				s2 = s2mask & _mm256_add_epi8(res, _mm256_set1_epi8('a' - 26));
+				s3 = s3mask & _mm256_add_epi8(res, _mm256_set1_epi8('0' - 52));
+				s4 = s4mask & _mm256_set1_epi8('+');
+				s5 = _mm256_andnot_si256(blockmask, _mm256_set1_epi8('/'));
+
+				/* Blend all the sets together and store: */
+				_mm256_storeu_si256(__m256i *)o, s1 | s2 | s3 | s4 | s5);
+
+				c += 24;	/* 36* 4 bytes of input  */
+				o += 32;	/* 8 * 4 bytes of output */
+				outl += 32;
+				srclen -= 24;
+			}
+                }
+                else
+#endif /* __AVX2__ */
 #ifdef __SSSE3__ /* x86_64 arch build only */
                 if (have_ssse3) {
-
 			/* If we have SSSE3 support, pick off 12 bytes at a
 			 * time for as long as we can: */
 			while (srclen >= 12)
@@ -287,6 +434,120 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
                 label0:;
 #endif
 
+#ifdef __AVX2__ /* x86_64 arch build only */
+                if (have_avx2) {
+			/* If we have AVX2 support, pick off 32 bytes at a time for as long
+			 * as we can, but make sure that we quit before seeing any == markers
+			 * at the end of the string. Also, because we write 8 zeroes at
+			 * the end of the output, ensure that there are at least 12 valid bytes
+			 * of input data remaining to close the gap. 32 + 2 + 12 = 46 bytes: */
+			while (srclen >= 46)
+			{
+				__m256i str, mask, res;
+				__m256i s1mask, s2mask, s3mask, s4mask, s5mask;
+#ifdef WITH_URLSAFE
+				__m256i s4amask, s5amask;
+#endif
+
+				/* Load string: */
+				str = _mm256_loadu_si256(__m256i *)c);
+
+				/* Classify characters into five sets:
+				 * Set 1: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" */
+				s1mask = _mm256_andnot_si256(
+						_mm256_cmplt_epi8(str, _mm256_set1_epi8('A')),
+						_mm256_cmplt_epi8(str, _mm256_set1_epi8('Z' + 1)));
+
+				/* Set 2: "abcdefghijklmnopqrstuvwxyz" */
+				s2mask = _mm256_andnot_si256(
+						_mm256_cmplt_epi8(str, _mm256_set1_epi8('a')),
+						_mm256_cmplt_epi8(str, _mm256_set1_epi8('z' + 1)));
+
+				/* Set 3: "0123456789" */
+				s3mask = _mm256_andnot_si256(
+						_mm256_cmplt_epi8(str, _mm256_set1_epi8('0')),
+						_mm256_cmplt_epi8(str, _mm256_set1_epi8('9' + 1)));
+
+				/* Set 4: "+" */
+				s4mask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('+'));
+#ifdef WITH_URLSAFE
+				s4amask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('-'));
+#endif
+				/* Set 5: "/" */
+				s5mask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('/'));
+#ifdef WITH_URLSAFE
+				s5amask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('_'));
+#endif
+				/* Check if all bytes have been classified; else fall back on bytewise code
+				 * to do error checking and reporting: */
+				if (_mm256_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask
+#ifdef WITH_URLSAFE
+                                | s4amask | s5amask
+#endif
+                                ) != 0xFFFF) {
+					break;
+				}
+				/* Subtract sets from byte values: */
+				res  = s1mask & _mm256_sub_epi8(str, _mm256_set1_epi8('A'));
+				res |= s2mask & _mm256_sub_epi8(str, _mm256_set1_epi8('a' - 26));
+				res |= s3mask & _mm256_sub_epi8(str, _mm256_set1_epi8('0' - 52));
+				res |= s4mask & _mm256_set1_epi8(62);
+				res |= s5mask & _mm256_set1_epi8(63);
+#ifdef WITH_URLSAFE
+				res |= s4amask & _mm256_set1_epi8(62);
+				res |= s5amask & _mm256_set1_epi8(63);
+#endif
+				/* Shuffle bytes to 32-bit bigendian: */
+				res = _mm256_shuffle_epi8(res,
+				      _mm256_setr_epi8(3, 2, 1, 0,
+                                                       7, 6, 5, 4,
+                                                       11, 10, 9, 8,
+                                                       15, 14, 13, 12,
+                                                       19, 18, 17, 16,
+                                                       23, 22, 21, 20,
+                                                       27, 26, 25, 24,
+                                                       31, 30, 29, 28));
+
+				/* Mask in a single byte per shift: */
+				mask = _mm256_set1_epi32(0x3F000000);
+
+				/* Pack bytes together: */
+				str = _mm256_slli_epi32(res & mask, 2);
+				mask = _mm256_srli_epi32(mask, 8);
+
+				str |= _mm256_slli_epi32(res & mask, 4);
+				mask = _mm256_srli_epi32(mask, 8);
+
+				str |= _mm256_slli_epi32(res & mask, 6);
+				mask = _mm256_srli_epi32(mask, 8);
+
+				str |= _mm256_slli_epi32(res & mask, 8);
+
+				/* Reshuffle and repack into 12-byte output format: */
+				str = _mm256_shuffle_epi8(str,
+				      _mm256_setr_epi8(3, 2, 1,
+                                                       7, 6, 5,
+                                                       11, 10, 9,
+                                                       15, 14, 13,
+                                                       19, 18, 17,
+                                                       23, 22, 21,
+                                                       27, 26, 25,
+                                                       31, 30, 29,
+                                                       -1, -1, -1,
+                                                       -1, -1, -1,
+                                                       -1,
+                                                       -1));
+
+				/* Store back: */
+				_mm256_storeu_si256((__m256i *)o, str);
+
+				c += 32;
+				o += 24;
+				outl += 24;
+				srclen -= 32;
+			}
+                }
+#endif /* __AVX2__ */
 #ifdef __SSSE3__ /* x86_64 arch build only */
                 if (have_ssse3) {
 			/* If we have SSSE3 support, pick off 16 bytes at a time for as long
