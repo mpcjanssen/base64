@@ -1,7 +1,10 @@
 #include <stddef.h>	/* size_t */
 
 /*
- * x86 acceleration header files
+ * x86 acceleration
+ *
+ * We detect features using cpuid, but we still need compiler support
+ * for extended instructions.
  */
 #if __x86_64__ || __i386__
 #if defined(__SSSE3__) || defined(__AVX2__)
@@ -11,7 +14,10 @@
 #endif
 
 /*
- * ARM acceleration files
+ * ARM acceleration
+ *
+ * __ARM_NEON indicates ARMv7+, which has NEON instructions
+ * __LP64__ indicates ARMv8+, which has a few extensions to the original NEON
  */
 /*#undef __ARM_NEON*/
 #ifdef __ARM_NEON
@@ -23,7 +29,7 @@
 static const char base64_table_enc[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static const char base64_table_enc_urlsafe[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-/* transposed versions of the above */
+/* Transposed versions of the tables above, for ARM NEON, generated at runtime */
 static char base64_table_enc_T[65];
 static char base64_table_enc_urlsafe_T[65];
 
@@ -801,7 +807,7 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 #endif /* __SSSE3__ */
 #ifdef __ARM_NEON
                         /*
-                         * ARM NEON allows us to process 16 bytes at a time and output 12.
+                         * ARM NEON allows us to process 16 bytes and output 12.
                          * This is similar to the approach taken with SSSE3.
                          */
 			while (srclen >= 24)
