@@ -800,7 +800,10 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
                 }
 #endif /* __SSSE3__ */
 #ifdef __ARM_NEON
-                        /* ARM NEON allows us to process 16 bytes at a time and output 12 */
+                        /*
+                         * ARM NEON allows us to process 16 bytes at a time and output 12.
+                         * This is similar to the approach taken with SSSE3.
+                         */
 			while (srclen >= 24)
 			{
 				uint8x16_t str, mask, res;
@@ -841,11 +844,8 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
                                 uint64x2_t bits = vreinterpretq_u64_u32(s1mask | s2mask | s3mask | s4mask | s5mask);
                                 uint64_t b0 = vgetq_lane_u64(bits, 0);
                                 uint64_t b1 = vgetq_lane_u64(bits, 1);
-
-                                if (b0 != 0xFFFFFFFFFFFFFFFF || b1 != 0xFFFFFFFFFFFFFFFF) {
-                                    printf("encountered unclassified character; using slow path\n");
+                                if (b0 != 0xFFFFFFFFFFFFFFFF || b1 != 0xFFFFFFFFFFFFFFFF)
                                     break;
-                                }
 
 				/* Subtract sets from byte values: */
                                 res  = s1mask & vsubq_u8(str, vdupq_n_u8('A'));
@@ -866,7 +866,7 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 				mask = vdupq_n_u32(0x3F000000);
 
 				/* Pack bytes together: */
-                                str |= vshlq_n_u32(res & mask, 2);
+                                str  = vshlq_n_u32(res & mask, 2);
                                 mask = vshrq_n_u32(mask, 8);
                                 str |= vshlq_n_u32(res & mask, 4);
                                 mask = vshrq_n_u32(mask, 8);
