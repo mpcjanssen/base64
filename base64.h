@@ -9,6 +9,7 @@ struct base64_state {
         int urlsafe;
 #endif
         const char *base64_table_enc;
+        const char *base64_table_enc_T; /* transposed table */
 };
 
 /* Wrapper function to encode a plain string of given length. Output is written

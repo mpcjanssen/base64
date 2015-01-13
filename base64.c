@@ -1,11 +1,31 @@
 #include <stddef.h>	/* size_t */
+
+/*
+ * x86 acceleration header files
+ */
 #if __x86_64__ || __i386__
 #if defined(__SSSE3__) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
 #include <cpuid.h>
 #endif
+
+/*
+ * ARM acceleration files
+ */
+/*#undef __ARM_NEON*/
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
+
 #include "base64.h"
+
+static const char base64_table_enc[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char base64_table_enc_urlsafe[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/* transposed versions of the above */
+static char base64_table_enc_T[65];
+static char base64_table_enc_urlsafe_T[65];
 
 
 #if __x86_64__ || __i386__
@@ -62,7 +82,7 @@ static unsigned int _cpuid_edx_7 = 0;
 
 /* use CPUID to get x86 processor features */
 static void inline
-_get_x86_features()
+_init_x86_features()
 {
     if (!have_features) {
         __get_cpuid(/*level:*/ 1, &_cpuid_eax_1, &_cpuid_ebx_1, &_cpuid_ecx_1, &_cpuid_edx_1);
@@ -72,23 +92,48 @@ _get_x86_features()
         __get_cpuid(/*level:*/ 7, &_cpuid_eax_7, &_cpuid_ebx_7, &_cpuid_ecx_7, &_cpuid_edx_7);
         have_avx2 = _cpuid_ebx_7 & (1 << 5);
 
-        printf("have_sss3 = %d\n", have_ssse3);
+        printf("have_ssse3 = %d\n", have_ssse3);
         printf("have_avx2 = %d\n", have_avx2);
     }
 }
 #endif
 
-static const char
-base64_table_enc[] =
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	"abcdefghijklmnopqrstuvwxyz"
-	"0123456789+/";
+/* only certain instructions sets require transposed tables */
+#define NEED_TRANSPOSED_TABLES __ARM_NEON
 
-static const char
-base64_table_enc_urlsafe[] =
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	"abcdefghijklmnopqrstuvwxyz"
-	"0123456789-_";
+#ifdef NEED_TRANSPOSED_TABLES
+static unsigned int transposed = 0;
+static void inline
+_create_transposed_tables()
+{
+    const char *E;
+    const char *p0, *p1, *p2, *p3;
+    char enc[64];
+    int i;
+
+    if (!transposed) {
+        /* transpose the encoding tables to match what vld4q_u8 expects */
+        for (E = (const char *) base64_table_enc, i = 0, p0 = &E[0], p1 = &E[16], p2 = &E[32], p3 = &E[48]; i < 16; i++) {
+            enc[i*4  ] = p0[i];
+            enc[i*4+1] = p1[i];
+            enc[i*4+2] = p2[i];
+            enc[i*4+3] = p3[i];
+        }
+        memcpy(base64_table_enc_T, enc, 64);
+
+        /* transpose URL-safe table */
+        for (E = (const char *) base64_table_enc_urlsafe, i = 0, p0 = &E[0], p1 = &E[16], p2 = &E[32], p3 = &E[48]; i < 16; i++) {
+            enc[i*4  ] = p0[i];
+            enc[i*4+1] = p1[i];
+            enc[i*4+2] = p2[i];
+            enc[i*4+3] = p3[i];
+        }
+        memcpy(base64_table_enc_urlsafe_T, enc, 64);
+
+        transposed = 1;
+    }
+}
+#endif
 
 /* In the lookup table below, note that the value for '=' (character 61) is
  * 254, not 255. This character is used for in-band signaling of the end of
@@ -131,14 +176,20 @@ base64_stream_encode_init (struct base64_state *state
 #endif
                            )
 {
+#ifdef NEED_TRANSPOSED_TABLES
+        _create_transposed_tables();
+#endif
+
 	state->eof = 0;
 	state->bytes = 0;
 	state->carry = 0;
 #ifdef WITH_URLSAFE
         state->urlsafe = urlsafe ? 1 : 0;
         state->base64_table_enc = urlsafe ? base64_table_enc_urlsafe : base64_table_enc;
+        state->base64_table_enc_T = urlsafe ? base64_table_enc_urlsafe_T : base64_table_enc_T;
 #else
         state->base64_table_enc = base64_table_enc;
+        state->base64_table_enc_T = base64_table_enc_T;
 #endif
 }
 
@@ -154,9 +205,21 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 	size_t outl = 0;
 	struct base64_state st;
 
-#if __x86_64__ || __i386__
-        _get_x86_features();
+#ifdef __ARM_NEON
+#ifdef __LP64__
+        /*
+         * Store the entire encoding table into 4 128-bit vectors; we
+         * copy from a transposed version of the table to match what
+         * vld4q_u8 expects.
+         */
+        uint8x16x4_t venc4 = vld4q_u8(state->base64_table_enc_T);
 #endif
+#endif
+
+#if __x86_64__ || __i386__
+        _init_x86_features();
+#endif
+
 
 	st.bytes = state->bytes;
 	st.carry = state->carry;
@@ -177,7 +240,7 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
                 if (have_avx2) {
 			/* If we have AVX2 support, pick off 24 bytes at a
 			 * time for as long as we can: */
-			while (srclen >= 24)
+                        while (srclen >= 32) /* read 32 bytes, process the first 24, and output 32 */
 			{
 				__m256i str, mask, res, blockmask;
 				__m256i s1, s2, s3, s4, s5;
@@ -283,7 +346,7 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
                 if (have_ssse3) {
 			/* If we have SSSE3 support, pick off 12 bytes at a
 			 * time for as long as we can: */
-			while (srclen >= 12)
+                        while (srclen >= 16) /* read 16 bytes, process the first 12, and output 16 */
 			{
 				__m128i str, mask, res, blockmask;
 				__m128i s1, s2, s3, s4, s5;
@@ -370,6 +433,74 @@ base64_stream_encode (struct base64_state *state, const char *const src, size_t 
 			}
                 }
 #endif
+#if defined(__ARM_NEON)
+                        /* ARM NEON version */
+                        while (srclen >= 16) /* we read 16 bytes, process the first 12, and output 16 */
+			{
+                                uint8x16_t str, mask, res;
+
+				/* Load string: */
+                                str = vld1q_u8((void *) c);
+
+				/* Reorder to 32-bit big-endian, duplicating the third byte in every block of four.
+				 * This copies the third byte to its final destination, so we can include it later
+				 * by just masking instead of shifting and masking.
+				 * The workset must be in big-endian, otherwise the shifted bits do not carry over
+				 * properly among adjacent bytes: */
+                                str = __builtin_shufflevector(str,
+                                                              str,
+                                                              2, 2, 1, 0,
+                                                              5, 5, 4, 3,
+                                                              8, 8, 7, 6,
+                                                              11, 11, 10, 9);
+
+				/* Mask to pass through only the lower 6 bits of one byte: */
+                                mask = vdupq_n_u32(0x3F000000);
+
+				/* Shift bits by 2, mask in only the first byte: */
+                                res = vshrq_n_u32(str, 2) & mask;
+                                mask = vshrq_n_u32(mask, 8);
+
+				/* Shift bits by 4, mask in only the second byte: */
+                                res |= vshrq_n_u32(str, 4) & mask;
+                                mask = vshrq_n_u32(mask, 8);
+
+				/* Shift bits by 6, mask in only the third byte: */
+                                res |= vshrq_n_u32(str, 6) & mask;
+                                mask = vshrq_n_u32(mask, 8);
+
+				/* No shift necessary for the fourth byte because we duplicated
+				 * the third byte to this position; just mask: */
+				res |= str & mask;
+
+				/* Reorder to 32-bit little-endian: */
+                                res = __builtin_shufflevector(res,
+                                                              res,
+                                                              3, 2, 1, 0,
+                                                              7, 6, 5, 4,
+                                                              11, 10, 9, 8,
+                                                              15, 14, 13, 12);
+
+
+#ifdef __LP64__
+                                /* ARM64 allows lookup in a 64 byte table -- perfect! */
+                                str = vqtbl4q_u8(venc4, res); /* look up each byte in the table */
+
+                                /* store resulting 16 bytes in o */
+                                vst1q_u8((void *) o, str);
+#else /* __LP64__ */
+                                /*
+                                 * ARMv7 allows lookup only in a 32 byte table, so we need to
+                                 * do this in two parts
+                                 */
+#endif /* __LP64__ */
+				c += 12;	/* 3 * 4 bytes of input  */
+				o += 16;	/* 4 * 4 bytes of output */
+				outl += 16;
+				srclen -= 12;
+			}
+#endif /* __ARM_NEON */
+
 			if (srclen-- == 0) {
 				break;
 			}
@@ -442,7 +573,7 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 	struct base64_state st;
 
 #if __x86_64__ || __i386__
-        _get_x86_features();
+        _init_x86_features();
 #endif
 
 	st.eof = state->eof;
@@ -480,9 +611,6 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 			{
 				__m256i str, mask, res;
 				__m256i s1mask, s2mask, s3mask, s4mask, s5mask;
-#ifdef WITH_URLSAFE
-				__m256i s4amask, s5amask;
-#endif
 
 				/* Load string: */
 				str = _mm256_loadu_si256(__m256i *)c);
@@ -504,34 +632,34 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 						_mm256_cmplt_epi8(str, _mm256_set1_epi8('9' + 1)));
 
 				/* Set 4: "+" */
-				s4mask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('+'));
 #ifdef WITH_URLSAFE
-				s4amask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('-'));
+				s4mask = _mm256_or_si256(
+                                                _mm256_cmpeq_epi8(str, _mm256_set1_epi8('-')),
+                                                _mm256_cmpeq_epi8(str, _mm256_set1_epi8('+')));
+#else
+				s4mask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('+'));
 #endif
 				/* Set 5: "/" */
-				s5mask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('/'));
 #ifdef WITH_URLSAFE
-				s5amask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('_'));
+				s5mask = _mm256_or_si256(
+                                                _mm256_cmpeq_epi8(str, _mm256_set1_epi8('_')),
+                                                _mm256_cmpeq_epi8(str, _mm256_set1_epi8('/')));
+#else
+				s5mask = _mm256_cmpeq_epi8(str, _mm256_set1_epi8('/'));
 #endif
+
 				/* Check if all bytes have been classified; else fall back on bytewise code
 				 * to do error checking and reporting: */
-				if (_mm256_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask
-#ifdef WITH_URLSAFE
-                                | s4amask | s5amask
-#endif
-                                ) != 0xFFFF) {
+				if (_mm256_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask) != 0xFFFF)
 					break;
-				}
+
 				/* Subtract sets from byte values: */
 				res  = s1mask & _mm256_sub_epi8(str, _mm256_set1_epi8('A'));
 				res |= s2mask & _mm256_sub_epi8(str, _mm256_set1_epi8('a' - 26));
 				res |= s3mask & _mm256_sub_epi8(str, _mm256_set1_epi8('0' - 52));
 				res |= s4mask & _mm256_set1_epi8(62);
 				res |= s5mask & _mm256_set1_epi8(63);
-#ifdef WITH_URLSAFE
-				res |= s4amask & _mm256_set1_epi8(62);
-				res |= s5amask & _mm256_set1_epi8(63);
-#endif
+
 				/* Shuffle bytes to 32-bit bigendian: */
 				res = _mm256_shuffle_epi8(res,
 				      _mm256_setr_epi8(3, 2, 1, 0,
@@ -594,9 +722,6 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 			{
 				__m128i str, mask, res;
 				__m128i s1mask, s2mask, s3mask, s4mask, s5mask;
-#ifdef WITH_URLSAFE
-				__m128i s4amask, s5amask;
-#endif
 
 				/* Load string: */
 				str = _mm_loadu_si128((__m128i *)c);
@@ -618,34 +743,32 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 						_mm_cmplt_epi8(str, _mm_set1_epi8('9' + 1)));
 
 				/* Set 4: "+" */
-				s4mask = _mm_cmpeq_epi8(str, _mm_set1_epi8('+'));
 #ifdef WITH_URLSAFE
-				s4amask = _mm_cmpeq_epi8(str, _mm_set1_epi8('-'));
+				s4mask = _mm_or_si128(
+                                                _mm_cmpeq_epi8(str, _mm_set1_epi8('-')),
+                                                _mm_cmpeq_epi8(str, _mm_set1_epi8('+')));
+#else
+				s4mask = _mm_cmpeq_epi8(str, _mm_set1_epi8('+'));
 #endif
 				/* Set 5: "/" */
-				s5mask = _mm_cmpeq_epi8(str, _mm_set1_epi8('/'));
 #ifdef WITH_URLSAFE
-				s5amask = _mm_cmpeq_epi8(str, _mm_set1_epi8('_'));
+				s5mask = _mm_or_si128(
+                                                _mm_cmpeq_epi8(str, _mm_set1_epi8('_')),
+                                                _mm_cmpeq_epi8(str, _mm_set1_epi8('/')));
+#else
+				s5mask = _mm_cmpeq_epi8(str, _mm_set1_epi8('/'));
 #endif
 				/* Check if all bytes have been classified; else fall back on bytewise code
 				 * to do error checking and reporting: */
-				if (_mm_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask
-#ifdef WITH_URLSAFE
-                                | s4amask | s5amask
-#endif
-                                ) != 0xFFFF) {
-					break;
-				}
+				if (_mm_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask) != 0xFFFF)
+                                        break;
+
 				/* Subtract sets from byte values: */
 				res  = s1mask & _mm_sub_epi8(str, _mm_set1_epi8('A'));
 				res |= s2mask & _mm_sub_epi8(str, _mm_set1_epi8('a' - 26));
 				res |= s3mask & _mm_sub_epi8(str, _mm_set1_epi8('0' - 52));
 				res |= s4mask & _mm_set1_epi8(62);
 				res |= s5mask & _mm_set1_epi8(63);
-#ifdef WITH_URLSAFE
-				res |= s4amask & _mm_set1_epi8(62);
-				res |= s5amask & _mm_set1_epi8(63);
-#endif
 				/* Shuffle bytes to 32-bit bigendian: */
 				res = _mm_shuffle_epi8(res,
 				      _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12));
@@ -656,13 +779,10 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 				/* Pack bytes together: */
 				str = _mm_slli_epi32(res & mask, 2);
 				mask = _mm_srli_epi32(mask, 8);
-
 				str |= _mm_slli_epi32(res & mask, 4);
 				mask = _mm_srli_epi32(mask, 8);
-
 				str |= _mm_slli_epi32(res & mask, 6);
 				mask = _mm_srli_epi32(mask, 8);
-
 				str |= _mm_slli_epi32(res & mask, 8);
 
 				/* Reshuffle and repack into 12-byte output format: */
@@ -679,6 +799,100 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 			}
                 }
 #endif /* __SSSE3__ */
+#ifdef __ARM_NEON
+                        /* ARM NEON allows us to process 16 bytes at a time and output 12 */
+			while (srclen >= 24)
+			{
+				uint8x16_t str, mask, res;
+				uint8x16_t s1mask, s2mask, s3mask, s4mask, s5mask;
+
+				/* Load string: */
+                                str = vld1q_u8((void *) c);
+
+				/* Classify characters into five sets:
+				 * Set 1: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" */
+				s1mask = vcgeq_u8(str, vdupq_n_u8('A')) & /* >= A */
+                                         vcleq_u8(str, vdupq_n_u8('Z')) ; /* <= Z */
+
+				/* Set 2: "abcdefghijklmnopqrstuvwxyz" */
+				s2mask = vcgeq_u8(str, vdupq_n_u8('a')) & /* >= a */
+                                         vcleq_u8(str, vdupq_n_u8('z')) ; /* <= z */
+
+				/* Set 3: "0123456789" */
+				s3mask = vcgeq_u8(str, vdupq_n_u8('0')) & /* >= 0 */
+                                         vcleq_u8(str, vdupq_n_u8('9')) ; /* <= 9 */
+
+				/* Set 4: "+" */
+#ifdef WITH_URLSAFE
+                                s4mask = vceqq_u8(str, vdupq_n_u8('-')) |
+                                         vceqq_u8(str, vdupq_n_u8('+')) ;
+#else
+                                s4mask = vceqq_u8(str, vdupq_n_u8('+'));
+#endif
+				/* Set 5: "/" */
+#ifdef WITH_URLSAFE
+                                s5mask = vceqq_u8(str, vdupq_n_u8('_')) |
+                                         vceqq_u8(str, vdupq_n_u8('/')) ;
+#else
+                                s5mask = vceqq_u8(str, vdupq_n_u8('/'));
+#endif
+				/* Check if all bytes have been classified; else fall back on bytewise code
+				 * to do error checking and reporting: */
+                                uint64x2_t bits = vreinterpretq_u64_u32(s1mask | s2mask | s3mask | s4mask | s5mask);
+                                uint64_t b0 = vgetq_lane_u64(bits, 0);
+                                uint64_t b1 = vgetq_lane_u64(bits, 1);
+
+                                if (b0 != 0xFFFFFFFFFFFFFFFF || b1 != 0xFFFFFFFFFFFFFFFF) {
+                                    printf("encountered unclassified character; using slow path\n");
+                                    break;
+                                }
+
+				/* Subtract sets from byte values: */
+                                res  = s1mask & vsubq_u8(str, vdupq_n_u8('A'));
+                                res |= s2mask & vsubq_u8(str, vdupq_n_u8('a' - 26));
+                                res |= s3mask & vsubq_u8(str, vdupq_n_u8('0' - 52));
+				res |= s4mask & vdupq_n_u8(62);
+                                res |= s5mask & vdupq_n_u8(63);
+
+				/* Shuffle bytes to 32-bit bigendian: */
+                                res = __builtin_shufflevector(res,
+                                                              res,
+                                                              3, 2, 1, 0,
+                                                              7, 6, 5, 4,
+                                                              11, 10, 9, 8,
+                                                              15, 14, 13, 12);
+
+				/* Mask in a single byte per shift: */
+				mask = vdupq_n_u32(0x3F000000);
+
+				/* Pack bytes together: */
+                                str |= vshlq_n_u32(res & mask, 2);
+                                mask = vshrq_n_u32(mask, 8);
+                                str |= vshlq_n_u32(res & mask, 4);
+                                mask = vshrq_n_u32(mask, 8);
+                                str |= vshlq_n_u32(res & mask, 6);
+                                mask = vshrq_n_u32(mask, 8);
+                                str |= vshlq_n_u32(res & mask, 8);
+
+				/* Reshuffle and repack into 12-byte output format: */
+                                str = __builtin_shufflevector(str,
+                                                              str,
+                                                              3, 2, 1,
+                                                              7, 6, 5,
+                                                              11, 10, 9,
+                                                              15, 14, 13,
+                                                              -1, -1, -1, -1);
+
+                                /* store resulting 16 bytes in o */
+                                vst1q_u8((void *) o, str);
+
+				c += 16;
+				o += 12;
+				outl += 12;
+				srclen -= 16;
+                        }
+#endif /* __ARM_NEON */
+
 			if (srclen-- == 0) {
 				ret = 1;
 				break;
