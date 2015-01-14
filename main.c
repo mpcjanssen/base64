@@ -20,7 +20,7 @@ enc (FILE *fp)
 	base64_stream_encode_init(&state);
 
 	while ((nread = fread(buf, 1, BUFSIZE, fp)) > 0) {
-		base64_stream_encode(&state, buf, nread, out, &nout);
+                (*base64_stream_encode)(&state, buf, nread, out, &nout);
 		if (nout) {
 			fwrite(out, nout, 1, stdout);
 		}
@@ -52,7 +52,7 @@ dec (FILE *fp)
 	base64_stream_decode_init(&state);
 
 	while ((nread = fread(buf, 1, BUFSIZE, fp)) > 0) {
-		if (!base64_stream_decode(&state, buf, nread, out, &nout)) {
+                if (!(*base64_stream_decode)(&state, buf, nread, out, &nout)) {
 			fprintf(stderr, "decoding error\n");
 			ret = 0;
 			goto out;
