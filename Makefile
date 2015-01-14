@@ -30,4 +30,4 @@ analyze: clean
 	scan-build --use-analyzer=`which clang` --status-bugs make
 
 clean:
-	rm -f base64 libbase64.a
+	rm -f base64 libbase64.a *.o
