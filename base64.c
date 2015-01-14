@@ -33,7 +33,6 @@ static const char base64_table_enc_urlsafe[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd
 static char base64_table_enc_T[65];
 static char base64_table_enc_urlsafe_T[65];
 
-
 #if __x86_64__ || __i386__
 /*
  * Intel instrinsic functions we use.
@@ -90,18 +89,45 @@ static unsigned int _cpuid_edx_7 = 0;
 static void inline
 _init_x86_features()
 {
+/* older cpuid.h doesn't have this bit defined: */
+#ifndef bit_AVX2
+#define bit_AVX2 (1 << 5)
+#endif
+
     if (!have_features) {
-        __get_cpuid(/*level:*/ 1, &_cpuid_eax_1, &_cpuid_ebx_1, &_cpuid_ecx_1, &_cpuid_edx_1);
-        have_features = 1;
-        have_ssse3 = _cpuid_ecx_1 & bit_SSE3;
+        unsigned int max_level = __get_cpuid_max(0, NULL);
 
-        __get_cpuid(/*level:*/ 7, &_cpuid_eax_7, &_cpuid_ebx_7, &_cpuid_ecx_7, &_cpuid_edx_7);
-        have_avx2 = _cpuid_ebx_7 & (1 << 5);
+        if (max_level > 0) {
+            __get_cpuid(/*level:*/ 1, &_cpuid_eax_1, &_cpuid_ebx_1, &_cpuid_ecx_1, &_cpuid_edx_1);
+            have_features = 1;
+            have_ssse3 = _cpuid_ecx_1 & bit_SSE3;
+#if 0
+            printf("1:eax = %08x\n", _cpuid_eax_1);
+            printf("1:ebx = %08x\n", _cpuid_ebx_1);
+            printf("1:ecx = %08x\n", _cpuid_ecx_1);
+            printf("1:edx = %08x\n", _cpuid_edx_1);
+#endif
+            if (max_level >= 7) {
+                unsigned int eax, ebx, ecx, edx;
+                __cpuid_count(7, 0, eax, ebx, ecx, edx);
+                have_avx2 = (ebx & bit_AVX2) ? 1 : 0;
+                _cpuid_eax_7 = eax;
+                _cpuid_ebx_7 = ebx;
+                _cpuid_ecx_7 = ecx;
+                _cpuid_edx_7 = edx;
+            }
+#if 0
+            printf("7:eax = %08x\n", _cpuid_eax_7);
+            printf("7:ebx = %08x\n", _cpuid_ebx_7);
+            printf("7:ecx = %08x\n", _cpuid_ecx_7);
+            printf("7:edx = %08x\n", _cpuid_edx_7);
+#endif
+        }
 
-        have_avx2 = 1;
-
+#if 0
         printf("have_ssse3 = %d\n", have_ssse3);
         printf("have_avx2 = %d\n", have_avx2);
+#endif
     }
 }
 #endif
@@ -692,7 +718,7 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 				str |= _mm256_slli_epi32(res & mask, 8);
 
                                 /* As in AVX2 encoding, we have to shuffle and repack
-                                 * each 128-bit lanes separately due to the way
+                                 * each 128-bit lane separately due to the way
                                  * _mm256_shuffle_epi8 works */
 				l0 = _mm_shuffle_epi8(
                                      _mm256_extractf128_si256(str, 0),
