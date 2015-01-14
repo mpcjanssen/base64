@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include "base64.h"
 
+/* #define VERBOSE */
+
 static unsigned int have_features = 0;
 
 unsigned int have_ssse3 = 0;
@@ -27,7 +29,10 @@ static unsigned int _cpuid_edx_7 = 0;
 void
 query_cpu_features()
 {
-/* older cpuid.h doesn't have this bit defined: */
+#ifndef bit_SSSE3
+#define bit_SSSE3 (1 << 9)
+#endif
+
 #ifndef bit_AVX2
 #define bit_AVX2 (1 << 5)
 #endif
@@ -38,8 +43,8 @@ query_cpu_features()
         if (max_level > 0) {
             __get_cpuid(/*level:*/ 1, &_cpuid_eax_1, &_cpuid_ebx_1, &_cpuid_ecx_1, &_cpuid_edx_1);
             have_features = 1;
-            have_ssse3 = _cpuid_ecx_1 & bit_SSE3;
-#if 1
+            have_ssse3 = _cpuid_ecx_1 & bit_SSSE3;
+#ifdef VERBOSE
             printf("1:eax = %08x\n", _cpuid_eax_1);
             printf("1:ebx = %08x\n", _cpuid_ebx_1);
             printf("1:ecx = %08x\n", _cpuid_ecx_1);
@@ -54,14 +59,14 @@ query_cpu_features()
                 _cpuid_ecx_7 = ecx;
                 _cpuid_edx_7 = edx;
             }
-#if 1
+#ifdef VERBOSE
             printf("7:eax = %08x\n", _cpuid_eax_7);
             printf("7:ebx = %08x\n", _cpuid_ebx_7);
             printf("7:ecx = %08x\n", _cpuid_ecx_7);
             printf("7:edx = %08x\n", _cpuid_edx_7);
 #endif
         }
-#if 1
+#ifdef VERBOSE
         printf("have_ssse3 = %d\n", have_ssse3);
         printf("have_avx2 = %d\n", have_avx2);
 #endif
@@ -81,8 +86,10 @@ query_cpu_features()
 #endif
         have_features = 1;
 
+#ifdef VERBOSE
         printf("have_neon = %d\n", have_neon);
         printf("have_neon64 = %d\n", have_neon64);
+#endif
     }
 
 }

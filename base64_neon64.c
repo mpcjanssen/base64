@@ -25,7 +25,7 @@ base64_stream_encode_neon64 (struct base64_state *state, const char *const src, 
          * copy from a transposed version of the table to match what
          * vld4q_u8 expects.
          */
-        uint8x16x4_t venc4 = vld4q_u8(state->base64_table_enc_T);
+        uint8x16x4_t venc4 = vld4q_u8((const unsigned char *) state->base64_table_enc_T);
 
 	st.bytes = state->bytes;
 	st.carry = state->carry;
