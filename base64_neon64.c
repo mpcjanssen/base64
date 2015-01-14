@@ -89,7 +89,6 @@ base64_stream_encode_neon64 (struct base64_state *state, const char *const src, 
                                                               11, 10, 9, 8,
                                                               15, 14, 13, 12);
 
-
                                 /* ARM64 allows lookup in a 64 byte table -- perfect! */
                                 str = vqtbl4q_u8(venc4, res); /* look up each byte in the table */
 

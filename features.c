@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "base64.h"
 
-/* #define VERBOSE */
+#define VERBOSE
 
 static unsigned int have_features = 0;
 

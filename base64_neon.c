@@ -37,6 +37,8 @@ base64_stream_encode_neon (struct base64_state *state, const char *const src, si
                         while (srclen >= 16) /* we read 16 bytes, process the first 12, and output 16 */
 			{
                                 uint8x16_t str, mask, res;
+				uint8x16_t s1, s2, s3, s4, s5;
+				uint8x16_t s1mask, s2mask, s3mask, s4mask;
 
 				/* Load string: */
                                 str = vld1q_u8((void *) c);
@@ -80,13 +82,44 @@ base64_stream_encode_neon (struct base64_state *state, const char *const src, si
                                                               11, 10, 9, 8,
                                                               15, 14, 13, 12);
 
+				/* The bits have now been shifted to the right locations;
+				 * translate their values 0..63 to the Base64 alphabet: */
 
-                                /*
-                                 * ARMv7 allows lookup only in a 32 byte table, so we need to
-                                 * do this in two parts
-                                 *
-                                 * TBD
-                                 */
+				/* set 1: 0..25, "ABCDEFGHIJKLMNOPQRSTUVWXYZ" */
+                                s1mask = vcltq_u8(res, vmovq_n_u8(26));
+				blockmask = s1mask;
+
+				/* set 2: 26..51, "abcdefghijklmnopqrstuvwxyz" */
+                                s2mask = vandq_u8(vmvnq_u8(blockmask), vcltq_u8(res, vmovq_n_u8(52)));
+				blockmask |= s2mask;
+
+				/* set 3: 52..61, "0123456789" */
+                                s3mask = vandq_u8(vmvnq_u8(blockmask), vcltq_u8(res, vmovq_n_u8(62)));
+				blockmask |= s3mask;
+
+				/* set 4: 62, "+" */
+                                s3mask = vandq_u8(vmvnq_u8(blockmask),  vceqq_u8(res, vmovq_n_u8(62)));
+				blockmask |= s4mask;
+
+				/* set 5: 63, "/"
+				 * Everything that is not blockmasked */
+
+				/* Create the masked character sets: */
+                                s1 = vandq_u8(s1mask, vaddq_u8(res, vmovq_n_u8('A')));
+                                s2 = vandq_u8(s2mask, vaddq_u8(res, vmovq_n_u8('a' - 26)));
+                                s3 = vandq_u8(s3mask, vaddq_u8(res, vmovq_n_u8('0' - 52)));
+#ifdef WITH_URLSAFE
+                                s4 = vandq_u8(s4mask, vmovq_n_u8(state->urlsafe ? '-' : '+'));
+#else
+                                s4 = vandq_u8(s4mask, vmovq_n_u8('+'));
+#endif
+#ifdef WITH_URLSAFE
+
+                                s5 = vandq_u8(vmvnq_u8(blockmask), vmovq_n_u8(state->urlsafe ? '_' : '/'));
+#else
+                                s5 = vandq_u8(vmvnq_u8(blockmask), vmovq_n_u8('/'));
+#endif
+
 				c += 12;	/* 3 * 4 bytes of input  */
 				o += 16;	/* 4 * 4 bytes of output */
 				outl += 16;
