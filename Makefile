@@ -1,6 +1,6 @@
 LIBTOOL = libtool
 
-CFLAGS += -std=c89 -O3 -Wall -Wextra -pedantic
+CFLAGS += -O3 -Wall -Wextra -pedantic
 SSSE3_CFLAGS = -mssse3
 AVX2_CFLAGS = -mavx2
 NEON_CFLAGS =
