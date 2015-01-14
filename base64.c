@@ -102,12 +102,6 @@ _init_x86_features()
 
         printf("have_ssse3 = %d\n", have_ssse3);
         printf("have_avx2 = %d\n", have_avx2);
-
-#ifdef __AVX2__
-        printf("compiled with AVX2 support...\n");
-#else
-        printf("compiled without AVX2 support...\n");
-#endif
     }
 }
 #endif
@@ -614,11 +608,12 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
                 if (have_avx2) {
 			/* If we have AVX2 support, pick off 32 bytes at a time for as long
 			 * as we can, but make sure that we quit before seeing any == markers
-			 * at the end of the string. Also, because we write 8 zeroes at
-			 * the end of the output, ensure that there are at least 12 valid bytes
-			 * of input data remaining to close the gap. 32 + 2 + 12 = 46 bytes: */
-			while (srclen >= 46)
+			 * at the end of the string. Also, because we write 4 zeroes at
+			 * the end of the output, ensure that there are at least 6 valid bytes
+			 * of input data remaining to close the gap. 32 + 2 + 6 = 40 bytes: */
+			while (srclen >= 40)
 			{
+                                __m128i l0, l1;
 				__m256i str, mask, res;
 				__m256i s1mask, s2mask, s3mask, s4mask, s5mask;
 
@@ -660,8 +655,8 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 
 				/* Check if all bytes have been classified; else fall back on bytewise code
 				 * to do error checking and reporting: */
-				if (_mm256_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask) != 0xFFFF)
-					break;
+				if (_mm256_movemask_epi8(s1mask | s2mask | s3mask | s4mask | s5mask) != 0xFFFFFFFF)
+                                        break;
 
 				/* Subtract sets from byte values: */
 				res  = s1mask & _mm256_sub_epi8(str, _mm256_set1_epi8('A'));
@@ -676,10 +671,10 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
                                                        7, 6, 5, 4,
                                                        11, 10, 9, 8,
                                                        15, 14, 13, 12,
-                                                       19, 18, 17, 16,
-                                                       23, 22, 21, 20,
-                                                       27, 26, 25, 24,
-                                                       31, 30, 29, 28));
+                                                       3, 2, 1, 0,
+                                                       7, 6, 5, 4,
+                                                       11, 10, 9, 8,
+                                                       15, 14, 13, 12));
 
 				/* Mask in a single byte per shift: */
 				mask = _mm256_set1_epi32(0x3F000000);
@@ -696,23 +691,27 @@ base64_stream_decode (struct base64_state *state, const char *const src, size_t 
 
 				str |= _mm256_slli_epi32(res & mask, 8);
 
-				/* Reshuffle and repack into 12-byte output format: */
-				str = _mm256_shuffle_epi8(str,
-				      _mm256_setr_epi8(3, 2, 1,
-                                                       7, 6, 5,
-                                                       11, 10, 9,
-                                                       15, 14, 13,
-                                                       19, 18, 17,
-                                                       23, 22, 21,
-                                                       27, 26, 25,
-                                                       31, 30, 29,
-                                                       -1, -1, -1,
-                                                       -1, -1, -1,
-                                                       -1,
-                                                       -1));
+                                /* As in AVX2 encoding, we have to shuffle and repack
+                                 * each 128-bit lanes separately due to the way
+                                 * _mm256_shuffle_epi8 works */
+				l0 = _mm_shuffle_epi8(
+                                     _mm256_extractf128_si256(str, 0),
+                                     _mm_setr_epi8(3, 2, 1,
+                                                   7, 6, 5,
+                                                   11, 10, 9,
+                                                   15, 14, 13,
+                                                   -1, -1, -1, -1));
+				l1 = _mm_shuffle_epi8(
+                                     _mm256_extractf128_si256(str, 1),
+                                     _mm_setr_epi8(3, 2, 1,
+                                                   7, 6, 5,
+                                                   11, 10, 9,
+                                                   15, 14, 13,
+                                                   -1, -1, -1, -1));
 
 				/* Store back: */
-				_mm256_storeu_si256((__m256i *)o, str);
+				_mm_storeu_si128((__m128i *)o, l0);
+				_mm_storeu_si128((__m128i *)&o[12], l1);
 
 				c += 32;
 				o += 24;
