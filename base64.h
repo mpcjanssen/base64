@@ -81,6 +81,16 @@ extern void (*base64_stream_encode)(struct base64_state *, const char *const src
 extern int (*base64_stream_decode)(struct base64_state *state, const char *const src, size_t srclen, char *const out, size_t *const outlen);
 
 /*
+ * Codec selection
+ */
+#define BASE64_CODEC_STANDARD 1
+#define BASE64_CODEC_SSSE3 2
+#define BASE64_CODEC_AVX2 3
+#define BASE64_CODEC_NEON 4
+#define BASE64_CODEC_NEON64 5
+extern int base64_choose_codec(void);
+
+/*
  * Setup
  */
 extern void query_cpu_features(void);

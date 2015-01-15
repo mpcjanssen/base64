@@ -3,11 +3,12 @@
 
 #include "base64.h"
 
-#define VERBOSE
+/*#define VERBOSE*/
 
 /*
  * Function pointers to chosen codec functions for this CPU.
  */
+static int base64_codec_chosen = 0;
 void (*base64_stream_encode)(struct base64_state *, const char *const src, size_t srclen, char *const out, size_t *const outlen) = NULL;
 int (*base64_stream_decode)(struct base64_state *state, const char *const src, size_t srclen, char *const out, size_t *const outlen) = NULL;
 
@@ -50,12 +51,13 @@ _create_transposed_tables()
     }
 }
 
-static void
-choose_codec()
+int
+base64_choose_codec()
 {
-    if (!base64_stream_encode) {
+    if (!base64_codec_chosen) {
         base64_stream_encode = base64_stream_encode_std;
         base64_stream_decode = base64_stream_decode_std;
+        base64_codec_chosen = BASE64_CODEC_STANDARD;
 
         /* query the CPU for available features */
         query_cpu_features();
@@ -63,6 +65,7 @@ choose_codec()
         if (have_avx2) {
             base64_stream_encode = base64_stream_encode_avx2;
             base64_stream_decode = base64_stream_decode_avx2;
+            base64_codec_chosen = BASE64_CODEC_AVX2;
 #ifdef VERBOSE
             printf("libbase64: using AVX2 instructions\n");
 #endif
@@ -70,6 +73,7 @@ choose_codec()
         else if (have_ssse3) {
             base64_stream_encode = base64_stream_encode_ssse3;
             base64_stream_decode = base64_stream_decode_ssse3;
+            base64_codec_chosen = BASE64_CODEC_SSSE3;
 #ifdef VERBOSE
             printf("libbase64: using SSSE3 instructions\n");
 #endif
@@ -78,6 +82,7 @@ choose_codec()
         else if (have_neon) {
             if (have_neon64) {
                 base64_stream_encode = base64_stream_encode_neon64;
+                base64_codec_chosen = BASE64_CODEC_NEON64;
 
                 /* ARM64 NEON needs transposed tables */
                 _create_transposed_tables();
@@ -88,6 +93,7 @@ choose_codec()
             }
             else {
                 base64_stream_encode = base64_stream_encode_neon;
+                base64_codec_chosen = BASE64_CODEC_NEON;
 #ifdef VERBOSE
                 printf("libbase64: using NEON instructions\n");
 #endif
@@ -98,6 +104,7 @@ choose_codec()
         }
 #endif /* __ARM_ARCH_7A__ */
     }
+    return base64_codec_chosen;
 }
 
 /* In the lookup table below, note that the value for '=' (character 61) is
@@ -139,7 +146,7 @@ base64_stream_encode_init (struct base64_state *state
 #endif
                            )
 {
-        choose_codec();
+        base64_choose_codec();
 
 	state->eof = 0;
 	state->bytes = 0;
@@ -178,7 +185,7 @@ base64_stream_encode_final (struct base64_state *state, char *const out, size_t 
 void
 base64_stream_decode_init (struct base64_state *state)
 {
-        choose_codec();
+        base64_choose_codec();
 	state->eof = 0;
 	state->bytes = 0;
 	state->carry = 0;
@@ -194,8 +201,6 @@ base64_encode (const char *const src, size_t srclen, char *const out, size_t *co
 	size_t s;
 	size_t t;
 	struct base64_state state;
-
-        choose_codec();
 
 	/* Init the stream reader: */
 #ifdef WITH_URLSAFE
