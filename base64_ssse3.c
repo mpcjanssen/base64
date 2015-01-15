@@ -70,7 +70,6 @@ base64_stream_encode_ssse3(struct base64_state *state, const char *const src, si
 		for (;;)
 		{
 		case 0:
-                if (have_ssse3) {
 			/* If we have SSSE3 support, pick off 12 bytes at a
 			 * time for as long as we can: */
                         while (srclen >= 16) /* read 16 bytes, process the first 12, and output 16 */
@@ -157,7 +156,6 @@ base64_stream_encode_ssse3(struct base64_state *state, const char *const src, si
 				o += 16;	/* 4 * 4 bytes of output */
 				outl += 16;
 				srclen -= 12;
-			}
                         }
 			if (srclen-- == 0) {
 				break;
@@ -224,8 +222,6 @@ base64_stream_decode_ssse3 (struct base64_state *state, const char *const src, s
 #ifdef SKIP_INVALID
                 label0:;
 #endif
-
-                if (have_ssse3) {
 			/* If we have SSSE3 support, pick off 16 bytes at a time for as long
 			 * as we can, but make sure that we quit before seeing any == markers
 			 * at the end of the string. Also, because we write four zeroes at
@@ -310,8 +306,6 @@ base64_stream_decode_ssse3 (struct base64_state *state, const char *const src, s
 				outl += 12;
 				srclen -= 16;
 			}
-                }
-
 			if (srclen-- == 0) {
 				ret = 1;
 				break;

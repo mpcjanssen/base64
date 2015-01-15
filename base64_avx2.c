@@ -32,7 +32,6 @@ base64_stream_encode_avx2 (struct base64_state *state, const char *const src, si
 		for (;;)
 		{
 		case 0:
-                if (have_avx2) {
 			/* If we have AVX2 support, pick off 24 bytes at a
 			 * time for as long as we can: */
                         while (srclen >= 28) /* read 28 bytes, process the first 24, and output 32 */
@@ -156,8 +155,7 @@ base64_stream_encode_avx2 (struct base64_state *state, const char *const src, si
 			*o++ = state->base64_table_enc[*c++ & 0x3F];
 			st.bytes = 0;
 			outl += 2;
-		}
-	}
+        }
 	state->bytes = st.bytes;
 	state->carry = st.carry;
 	*outlen = outl;
@@ -198,8 +196,6 @@ base64_stream_decode_avx2 (struct base64_state *state, const char *const src, si
 #ifdef SKIP_INVALID
                 label0:;
 #endif
-
-                if (have_avx2) {
 			/* If we have AVX2 support, pick off 32 bytes at a time for as long
 			 * as we can, but make sure that we quit before seeing any == markers
 			 * at the end of the string. Also, because we write 4 zeroes at
@@ -312,7 +308,6 @@ base64_stream_decode_avx2 (struct base64_state *state, const char *const src, si
 				outl += 24;
 				srclen -= 32;
 			}
-                }
 			if (srclen-- == 0) {
 				ret = 1;
 				break;
