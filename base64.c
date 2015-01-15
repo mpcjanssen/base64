@@ -3,6 +3,8 @@
 
 #include "base64.h"
 
+#define VERBOSE
+
 /*
  * Function pointers to chosen codec functions for this CPU.
  */
@@ -61,10 +63,16 @@ choose_codec()
         if (have_avx2) {
             base64_stream_encode = base64_stream_encode_avx2;
             base64_stream_decode = base64_stream_decode_avx2;
+#ifdef VERBOSE
+            printf("libbase64: using AVX2 instructions\n");
+#endif
         }
         else if (have_ssse3) {
             base64_stream_encode = base64_stream_encode_ssse3;
             base64_stream_decode = base64_stream_decode_ssse3;
+#ifdef VERBOSE
+            printf("libbase64: using SSSE3 instructions\n");
+#endif
         }
         else if (have_neon) {
             if (have_neon64) {
@@ -72,12 +80,26 @@ choose_codec()
 
                 /* ARM64 NEON needs transposed tables */
                 _create_transposed_tables();
+
+#ifdef VERBOSE
+                printf("libbase64: using NEON64 instructions\n");
+#endif
             }
-            else
+            else {
+#ifdef __ARM_ARCH_7A__
+#ifdef VERBOSE
+                printf("libbase64: NEON available, but slower on armv7a, so not using\n");
+#endif
+#else /* __ARM_ARCH_7A__ */
                 base64_stream_encode = base64_stream_encode_neon;
+#ifdef VERBOSE
+                printf("libbase64: using NEON instructions\n");
+#endif
+            }
 
             /* both ARM variants use the same decoder */
             base64_stream_decode = base64_stream_decode_neon;
+#endif /* __ARM_ARCH_7A__ */
         }
     }
 }

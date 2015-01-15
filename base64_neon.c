@@ -17,6 +17,17 @@ base64_stream_encode_neon (struct base64_state *state, const char *const src, si
 	/* Use local temporaries to avoid cache thrashing: */
 	size_t outl = 0;
 	struct base64_state st;
+#ifdef WITH_URLSAFE
+        uint8x16_t dash_or_plus = vmovq_n_u8(state->urlsafe ? '-' : '+');
+#else
+        uint8x16_t dash_or_plus = vmovq_n_u8('+');
+#endif
+#ifdef WITH_URLSAFE
+        uint8x16_t underscore_or_forward_slash = vmovq_n_u8(state->urlsafe ? '_' : '/');
+#else
+        uint8x16_t underscore_or_forward_slash = vmovq_n_u8('/');
+#endif
+        uint8x16_t sixty_two = vmovq_n_u8(62);
 
 	st.bytes = state->bytes;
 	st.carry = state->carry;
@@ -39,6 +50,7 @@ base64_stream_encode_neon (struct base64_state *state, const char *const src, si
                                 uint8x16_t str, mask, res;
 				uint8x16_t s1, s2, s3, s4, s5;
 				uint8x16_t s1mask, s2mask, s3mask, s4mask;
+				uint8x16_t blockmask;
 
 				/* Load string: */
                                 str = vld1q_u8((void *) c);
@@ -94,31 +106,25 @@ base64_stream_encode_neon (struct base64_state *state, const char *const src, si
 				blockmask |= s2mask;
 
 				/* set 3: 52..61, "0123456789" */
-                                s3mask = vandq_u8(vmvnq_u8(blockmask), vcltq_u8(res, vmovq_n_u8(62)));
+                                s3mask = vandq_u8(vmvnq_u8(blockmask), vcltq_u8(res, sixty_two));
 				blockmask |= s3mask;
 
 				/* set 4: 62, "+" */
-                                s3mask = vandq_u8(vmvnq_u8(blockmask),  vceqq_u8(res, vmovq_n_u8(62)));
+                                s4mask = vceqq_u8(res, sixty_two);
 				blockmask |= s4mask;
 
 				/* set 5: 63, "/"
 				 * Everything that is not blockmasked */
 
 				/* Create the masked character sets: */
-                                s1 = vandq_u8(s1mask, vaddq_u8(res, vmovq_n_u8('A')));
-                                s2 = vandq_u8(s2mask, vaddq_u8(res, vmovq_n_u8('a' - 26)));
-                                s3 = vandq_u8(s3mask, vaddq_u8(res, vmovq_n_u8('0' - 52)));
-#ifdef WITH_URLSAFE
-                                s4 = vandq_u8(s4mask, vmovq_n_u8(state->urlsafe ? '-' : '+'));
-#else
-                                s4 = vandq_u8(s4mask, vmovq_n_u8('+'));
-#endif
-#ifdef WITH_URLSAFE
+                                s1 = vandq_u8(s1mask, vaddq_u8(res, vmovq_n_u8('A'))); /* 65 */
+                                s2 = vandq_u8(s2mask, vaddq_u8(res, vmovq_n_u8('a' - 26))); /* 71 */
+                                s3 = vandq_u8(s3mask, vaddq_u8(res, vmovq_n_u8('0' - 52))); /* -4 */
+                                s4 = vandq_u8(s4mask, dash_or_plus);
+                                s5 = vandq_u8(vmvnq_u8(blockmask), underscore_or_forward_slash);
 
-                                s5 = vandq_u8(vmvnq_u8(blockmask), vmovq_n_u8(state->urlsafe ? '_' : '/'));
-#else
-                                s5 = vandq_u8(vmvnq_u8(blockmask), vmovq_n_u8('/'));
-#endif
+				/* Blend all the sets together and store: */
+                                vst1q_u8((void *) o, s1|s2|s3|s4|s5);
 
 				c += 12;	/* 3 * 4 bytes of input  */
 				o += 16;	/* 4 * 4 bytes of output */
@@ -189,11 +195,11 @@ base64_stream_decode_neon (struct base64_state *state, const char *const src, si
 #ifdef SKIP_INVALID
                 label0:;
 #endif
-
-                        /*
-                         * ARM NEON allows us to process 16 bytes and output 12.
-                         * This is similar to the approach taken with SSSE3.
-                         */
+			/* If we have NEON support, pick off 16 bytes at a time for as long
+			 * as we can, but make sure that we quit before seeing any == markers
+			 * at the end of the string. Also, because we write four zeroes at
+			 * the end of the output, ensure that there are at least 6 valid bytes
+			 * of input data remaining to close the gap. 16 + 2 + 6 = 24 bytes: */
 			while (srclen >= 24)
 			{
 				uint8x16_t str, mask, res;
@@ -204,28 +210,28 @@ base64_stream_decode_neon (struct base64_state *state, const char *const src, si
 
 				/* Classify characters into five sets:
 				 * Set 1: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" */
-				s1mask = vcgeq_u8(str, vdupq_n_u8('A')) & /* >= A */
-                                         vcleq_u8(str, vdupq_n_u8('Z')) ; /* <= Z */
+				s1mask = vandq_u8(vcgeq_u8(str, vdupq_n_u8('A')),  /* >= A */
+                                                  vcleq_u8(str, vdupq_n_u8('Z'))); /* <= Z */
 
 				/* Set 2: "abcdefghijklmnopqrstuvwxyz" */
-				s2mask = vcgeq_u8(str, vdupq_n_u8('a')) & /* >= a */
-                                         vcleq_u8(str, vdupq_n_u8('z')) ; /* <= z */
+				s2mask = vandq_u8(vcgeq_u8(str, vdupq_n_u8('a')),  /* >= a */
+                                                  vcleq_u8(str, vdupq_n_u8('z'))); /* <= z */
 
 				/* Set 3: "0123456789" */
-				s3mask = vcgeq_u8(str, vdupq_n_u8('0')) & /* >= 0 */
-                                         vcleq_u8(str, vdupq_n_u8('9')) ; /* <= 9 */
+				s3mask = vandq_u8(vcgeq_u8(str, vdupq_n_u8('0')),  /* >= 0 */
+                                                  vcleq_u8(str, vdupq_n_u8('9'))); /* <= 9 */
 
 				/* Set 4: "+" */
 #ifdef WITH_URLSAFE
-                                s4mask = vceqq_u8(str, vdupq_n_u8('-')) |
-                                         vceqq_u8(str, vdupq_n_u8('+')) ;
+                                s4mask = vorrq_u8(vceqq_u8(str, vdupq_n_u8('-')),
+                                                  vceqq_u8(str, vdupq_n_u8('+')));
 #else
                                 s4mask = vceqq_u8(str, vdupq_n_u8('+'));
 #endif
 				/* Set 5: "/" */
 #ifdef WITH_URLSAFE
-                                s5mask = vceqq_u8(str, vdupq_n_u8('_')) |
-                                         vceqq_u8(str, vdupq_n_u8('/')) ;
+                                s5mask = vorrq_u8(vceqq_u8(str, vdupq_n_u8('_')),
+                                                  vceqq_u8(str, vdupq_n_u8('/')));
 #else
                                 s5mask = vceqq_u8(str, vdupq_n_u8('/'));
 #endif

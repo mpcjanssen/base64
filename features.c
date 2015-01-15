@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "base64.h"
 
-#define VERBOSE
+/* #define VERBOSE */
 
 static unsigned int have_features = 0;
 
@@ -79,11 +79,13 @@ query_cpu_features()
     if (!have_features) {
         /* For ARM we just rely on compile-time settings */
 #ifdef __ARM_NEON
+        /* TBD: Android will need a run-time check here since not all ARMv7 devices have NEON support */
         have_neon = 1;
 #ifdef __LP64__
         have_neon64 = 1;
 #endif
 #endif
+
         have_features = 1;
 
 #ifdef VERBOSE
