@@ -5,6 +5,7 @@
 
 #ifdef __AVX2__
 #include <immintrin.h>
+
 void
 base64_stream_encode_avx2 (struct base64_state *state, const char *const src, size_t srclen, char *const out, size_t *const outlen)
 {
@@ -131,7 +132,6 @@ base64_stream_encode_avx2 (struct base64_state *state, const char *const src, si
 				outl += 32;
 				srclen -= 24;
 			}
-                        }
 			if (srclen-- == 0) {
 				break;
 			}
@@ -155,6 +155,7 @@ base64_stream_encode_avx2 (struct base64_state *state, const char *const src, si
 			*o++ = state->base64_table_enc[*c++ & 0x3F];
 			st.bytes = 0;
 			outl += 2;
+                }
         }
 	state->bytes = st.bytes;
 	state->carry = st.carry;
