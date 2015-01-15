@@ -27,6 +27,8 @@ base64_stream_encode_neon64 (struct base64_state *state, const char *const src, 
          */
         uint8x16x4_t venc4 = vld4q_u8((const unsigned char *) state->base64_table_enc_T);
 
+        uint8x16_t lower_6_bits_mask = vdupq_n_u32(0x3F000000);
+
 	st.bytes = state->bytes;
 	st.carry = state->carry;
 
@@ -63,7 +65,7 @@ base64_stream_encode_neon64 (struct base64_state *state, const char *const src, 
                                                               11, 11, 10, 9);
 
 				/* Mask to pass through only the lower 6 bits of one byte: */
-                                mask = vdupq_n_u32(0x3F000000);
+                                mask = lower_6_bits_mask;
 
 				/* Shift bits by 2, mask in only the first byte: */
                                 res = vshrq_n_u32(str, 2) & mask;

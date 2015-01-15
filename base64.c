@@ -74,6 +74,7 @@ choose_codec()
             printf("libbase64: using SSSE3 instructions\n");
 #endif
         }
+#ifndef __ARM_ARCH_7A__ /* NEON is slower on ARMv7a */
         else if (have_neon) {
             if (have_neon64) {
                 base64_stream_encode = base64_stream_encode_neon64;
@@ -86,11 +87,6 @@ choose_codec()
 #endif
             }
             else {
-#ifdef __ARM_ARCH_7A__
-#ifdef VERBOSE
-                printf("libbase64: NEON available, but slower on armv7a, so not using\n");
-#endif
-#else /* __ARM_ARCH_7A__ */
                 base64_stream_encode = base64_stream_encode_neon;
 #ifdef VERBOSE
                 printf("libbase64: using NEON instructions\n");
@@ -99,8 +95,8 @@ choose_codec()
 
             /* both ARM variants use the same decoder */
             base64_stream_decode = base64_stream_decode_neon;
-#endif /* __ARM_ARCH_7A__ */
         }
+#endif /* __ARM_ARCH_7A__ */
     }
 }
 
