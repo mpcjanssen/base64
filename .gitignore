@@ -1,3 +1,8 @@
-base64
-test/test_base64
-base64.dSYM/
+base64.o
+base64_avx2.o
+base64_neon.o
+base64_neon64.o
+base64_ssse3.o
+base64_std.o
+cpufeatures.o
+libbase64.a

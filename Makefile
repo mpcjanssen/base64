@@ -24,7 +24,7 @@ libbase64.a: main.c base64.c base64_std.c base64_ssse3.c base64_avx2.c base64_ne
 ifeq ($(UNAME_S),Darwin)
 	$(LIBTOOL) -static base64.o base64_std.o base64_ssse3.o base64_avx2.o base64_neon.o base64_neon64.o cpufeatures.o -o libbase64.a
 else
-	$(AR) -r libbase64.a base64.o base64_std.o base64_ssse3.o base64_avx2.o base64_neon.o base64_neon64.o cpufeatures.o 
+	$(AR) -r libbase64.a base64.o base64_std.o base64_ssse3.o base64_avx2.o base64_neon.o base64_neon64.o cpufeatures.o
 endif
 
 
