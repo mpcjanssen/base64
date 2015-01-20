@@ -1,3 +1,18 @@
+# About this fork
+
+This is Inkymail's fork of aklomp's base64 library. This fork adds
+support for AVX2 and ARM NEON istructions. It also auto-detecets
+SSSE3 and AVX2 instructions at runtime and chooses the best codec
+accordingly, which prevents illegal instruction traps on older
+CPUs that don't support these instructions.
+
+Also added in this fork is support for URL-safe base64 and optional
+ignoring of illegal characters in the base64 stream (rather than
+aborting when an illegal character is encountered.)
+
+The remainder of this readme is identical to what's in the upstream
+repository.
+
 # Base64 stream encoder/decoder in C89
 
 This is an implementation of a base64 stream encoder/decoder in C89. It also
