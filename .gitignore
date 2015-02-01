@@ -1,10 +1,4 @@
-base64.o
-base64_avx2.o
-base64_neon.o
-base64_neon64.o
-base64_ssse3.o
-base64_std.o
-cpufeatures.o
+*.o
 libbase64.a
 base64
 base64.dSYM
