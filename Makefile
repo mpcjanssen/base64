@@ -102,3 +102,14 @@ analyze: clean
 
 clean:
 	rm -f bin/base64 bin/base64.o lib/libbase64.o lib/table_generator.o lib/table_generator lib/config.h $(OBJS)
+
+.PHONY: wrapper wrappertest
+
+wrappertest: wrapper fbase64-1.0.dylib
+	tclsh wrapper/test.tcl
+	
+
+wrapper: fbase64-1.0.dylib
+	
+fbase64-1.0.dylib: wrapper/wrapper.c	lib/libbase64.o
+	gcc $^ -I./include -ltclstub8.6 -L/usr/local/lib -DUSE_TCL_STUBS -shared -o $@
