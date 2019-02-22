@@ -1,5 +1,6 @@
-load fbase64-1.0.dylib fbase64
-puts [time {fbase64::encode "adsdasssssssssssssssssssasfkas;fkjklagjkljafkldsfj lajfadklsjf jalfkjdsfkl jdsaklfj asdklfj alsdfjkljdsaf ladjsfl adjsfkljsdfkljds"} 10000]
+tcl::tm::path add [file dirname [info script]]
+puts [package require fbase64] 
+puts [time {fbase64::encode [string repeat "ab" 100000]} 1000]
 set a [fbase64::encode "adsdasssssssssssssssssssasfkas;fkjklagjkljafkldsfj lajfadklsjf jalfkjdsfkl jdsaklfj asdklfj alsdfjkljdsaf ladjsfl adjsfkljsdfkljds"]
 puts $a
 

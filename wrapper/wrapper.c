@@ -49,7 +49,7 @@ BaseDecode_Cmd(ClientData cdata, Tcl_Interp *interp, int objc, Tcl_Obj *const ob
       Tcl_SetObjResult(interp, output);
       return TCL_OK;
     } else {
-      Tcl_SetObjResult(interp, Tcl_NewStringObj("error while decoding",-1));
+      Tcl_SetResult(interp, "error while decoding", TCL_STATIC);
       return TCL_ERROR;
     }
 
@@ -60,6 +60,5 @@ int DLLEXPORT Fbase64_Init(Tcl_Interp * interp) {
     }
     Tcl_CreateObjCommand(interp, "fbase64::encode",BaseEncode_Cmd,NULL, NULL);
     Tcl_CreateObjCommand(interp, "fbase64::decode",BaseDecode_Cmd,NULL, NULL);
-    Tcl_PkgProvide(interp, "fbase64", "0.1");
     return TCL_OK;
 }

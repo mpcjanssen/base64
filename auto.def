@@ -1,0 +1,13 @@
+# Initial auto.def created by 'autosetup --init=make'
+
+use cc
+
+# Add any user options here
+options {
+}
+define PKG_VERSION 1.0
+define DYNEXT [info sharedlibextension]
+define OS [string tolower $::tcl_platform(os)]
+
+make-config-header config.h
+make-template Makefile.in

@@ -66,7 +66,7 @@ bin/base64: bin/base64.o lib/libbase64.o
 
 lib/libbase64.o: $(OBJS)
 	$(LD) -r -o $@ $^
-	$(OBJCOPY) --keep-global-symbols=lib/exports.txt $@
+	# $(OBJCOPY) --keep-global-symbols=lib/exports.txt $@
 
 lib/config.h:
 	@echo "#define HAVE_AVX2                  $(HAVE_AVX2)"                   > $@
@@ -103,13 +103,25 @@ analyze: clean
 clean:
 	rm -f bin/base64 bin/base64.o lib/libbase64.o lib/table_generator.o lib/table_generator lib/config.h $(OBJS)
 
-.PHONY: wrapper wrappertest
+.PHONY: wrapper wrappertest package
 
-wrappertest: wrapper fbase64-1.0.dylib
+package: wrapper/fbase64-@PKG_VERSION@.tm wrapper/fbase64@DYNEXT@
+
+SITETCL?=~/Src/site-tcl
+TARGET?=$(SITETCL)/modules-@OS@/
+
+package-install: wrapper/fbase64-@PKG_VERSION@.tm wrapper/fbase64@DYNEXT@ 
+	mkdir -p $(TARGET)
+	cp $^ $(TARGET)
+	
+wrappertest: wrapper
 	tclsh wrapper/test.tcl
-	
 
-wrapper: fbase64-1.0.dylib
+
+wrapper/fbase64-@PKG_VERSION@.tm: wrapper/fbase64.tm.in
+	cp $< $@ 
+
+wrapper: wrapper/fbase64@DYNEXT@
 	
-fbase64-1.0.dylib: wrapper/wrapper.c	lib/libbase64.o
+wrapper/fbase64@DYNEXT@: wrapper/wrapper.c	lib/libbase64.o
 	gcc $^ -I./include -ltclstub8.6 -L/usr/local/lib -DUSE_TCL_STUBS -shared -o $@
